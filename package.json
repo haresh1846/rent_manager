@@ -1,0 +1,42 @@
+{
+  "name": "rent-manager",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@expo/vector-icons": "^14.1.0",
+    "@hookform/resolvers": "^7.0.6",
+    "@react-native-async-storage/async-storage": "^3.1.1",
+    "@supabase/supabase-js": "^2.109.0",
+    "@tanstack/react-query": "^5.107.1",
+    "@tanstack/react-query-devtools": "^5.107.1",
+    "date-fns": "^4.4.0",
+    "expo": "~58.0.24",
+    "expo-constants": "^58.0.16",
+    "expo-document-picker": "^58.0.5",
+    "expo-file-system": "^58.0.13",
+    "expo-font": "^58.0.12",
+    "expo-image-picker": "^58.0.10",
+    "expo-linking": "^58.0.17",
+    "expo-router": "^58.0.31",
+    "expo-splash-screen": "^58.0.14",
+    "expo-status-bar": "~58.0.5",
+    "native-base": "^3.4.0",
+    "react": "19.3.0",
+    "react-hook-form": "^7.92.0",
+    "react-native": "0.88.1",
+    "react-native-calendars": "^1.1314.0",
+    "zod": "^4.6.7",
+    "zustand": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "private": true
+}
