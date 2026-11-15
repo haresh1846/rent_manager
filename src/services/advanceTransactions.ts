@@ -1,12 +1,9 @@
-import { supabase } from './supabase';
-import type {
-  AdvanceTransaction,
-  PaginatedResponse,
-} from '@/types';
+import { getSupabase } from './supabase';
+import type { AdvanceTransaction } from '@/types';
 
 export const advanceTransactionsService = {
   async getByLease(leaseId: string): Promise<AdvanceTransaction[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('advance_transactions')
       .select('*')
       .eq('lease_id', leaseId)
@@ -17,10 +14,10 @@ export const advanceTransactionsService = {
   },
 
   async create(transaction: Omit<AdvanceTransaction, 'id' | 'owner_id' | 'created_at' | 'lease'>): Promise<AdvanceTransaction> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await getSupabase().auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('advance_transactions')
       .insert({ ...transaction, owner_id: user.id })
       .select()
@@ -31,7 +28,7 @@ export const advanceTransactionsService = {
   },
 
   async delete(id: string): Promise<void> {
-    const { error } = await supabase
+    const { error } = await getSupabase()
       .from('advance_transactions')
       .delete()
       .eq('id', id);

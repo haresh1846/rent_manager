@@ -1,14 +1,9 @@
-import { supabase } from './supabase';
+import { getSupabase } from './supabase';
 import type {
   Property,
   Tenant,
-  Lease,
-  Payment,
-  AdvanceTransaction,
   PropertyFormData,
   TenantFormData,
-  LeaseFormData,
-  PaymentFormData,
   PaginatedResponse,
 } from '@/types';
 
@@ -21,7 +16,7 @@ export const propertiesService = {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    const { data, error, count } = await supabase
+    const { data, error, count } = await getSupabase()
       .from('properties')
       .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
@@ -39,7 +34,7 @@ export const propertiesService = {
   },
 
   async getById(id: string): Promise<Property | null> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('properties')
       .select('*')
       .eq('id', id)
@@ -50,10 +45,10 @@ export const propertiesService = {
   },
 
   async create(property: PropertyFormData): Promise<Property> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await getSupabase().auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('properties')
       .insert({ ...property, owner_id: user.id })
       .select()
@@ -64,7 +59,7 @@ export const propertiesService = {
   },
 
   async update(id: string, updates: Partial<PropertyFormData>): Promise<Property> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('properties')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', id)
@@ -76,7 +71,7 @@ export const propertiesService = {
   },
 
   async delete(id: string): Promise<void> {
-    const { error } = await supabase
+    const { error } = await getSupabase()
       .from('properties')
       .delete()
       .eq('id', id);
@@ -85,7 +80,7 @@ export const propertiesService = {
   },
 
   async search(query: string): Promise<Property[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('properties')
       .select('*')
       .or(`name.ilike.%${query}%,address.ilike.%${query}%`)
@@ -105,7 +100,7 @@ export const tenantsService = {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    const { data, error, count } = await supabase
+    const { data, error, count } = await getSupabase()
       .from('tenants')
       .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
@@ -123,7 +118,7 @@ export const tenantsService = {
   },
 
   async getById(id: string): Promise<Tenant | null> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('tenants')
       .select('*')
       .eq('id', id)
@@ -134,7 +129,7 @@ export const tenantsService = {
   },
 
   async getByProperty(propertyId: string): Promise<Tenant[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('tenants')
       .select('*')
       .eq('property_id', propertyId)
@@ -145,10 +140,10 @@ export const tenantsService = {
   },
 
   async create(tenant: TenantFormData): Promise<Tenant> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await getSupabase().auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('tenants')
       .insert({ ...tenant, owner_id: user.id })
       .select()
@@ -159,7 +154,7 @@ export const tenantsService = {
   },
 
   async update(id: string, updates: Partial<TenantFormData>): Promise<Tenant> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('tenants')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', id)
@@ -171,7 +166,7 @@ export const tenantsService = {
   },
 
   async delete(id: string): Promise<void> {
-    const { error } = await supabase
+    const { error } = await getSupabase()
       .from('tenants')
       .delete()
       .eq('id', id);
@@ -180,7 +175,7 @@ export const tenantsService = {
   },
 
   async search(query: string): Promise<Tenant[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('tenants')
       .select('*')
       .or(`name.ilike.%${query}%,phone.ilike.%${query}%,email.ilike.%${query}%`)

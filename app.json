@@ -6,22 +6,18 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0066CC"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.rentmanager.app"
     },
     "android": {
+      "allowBackup": false,
       "adaptiveIcon": {
-        "backgroundColor": "#0066CC",
-        "foregroundImage": "./assets/android-icon-foreground.png"
+        "backgroundColor": "#C6E6A4",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "package": "com.rentmanager.app",
-      "predictiveBackGestureEnabled": false
+      "package": "com.rentmanager.app"
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -30,18 +26,13 @@
     "plugins": [
       "expo-router",
       "expo-font",
-      "expo-splash-screen",
       [
-        "expo-document-picker",
+        "expo-splash-screen",
         {
-          "iCloudContainerEnvironment": "Production"
-        }
-      ],
-      [
-        "expo-image-picker",
-        {
-          "photosPermission": "Allow Rent Manager to access your photos for uploading documents.",
-          "cameraPermission": "Allow Rent Manager to access your camera for taking photos of documents."
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#173C34",
+          "imageWidth": 136
         }
       ]
     ],
@@ -49,11 +40,7 @@
     "extra": {
       "router": {
         "origin": false
-      },
-      "eas": {
-        "projectId": "your-project-id"
       }
-    },
-    "owner": ""
+    }
   }
 }

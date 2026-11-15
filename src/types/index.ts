@@ -61,6 +61,7 @@ export interface Payment {
   tenant_id: string;
   amount: number;
   payment_type: PaymentType;
+  settlement_source?: 'cash' | 'advance';
   month: number;
   year: number;
   status: PaymentStatus;
@@ -96,20 +97,20 @@ export interface PropertyFormData {
 
 export interface TenantFormData {
   name: string;
-  phone: string;
-  email: string;
-  id_proof_type: string;
-  id_proof_number: string;
-  emergency_contact_name: string;
-  emergency_contact_phone: string;
-  notes: string;
+  phone?: string;
+  email?: string;
+  id_proof_type?: string;
+  id_proof_number?: string;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
+  notes?: string;
 }
 
 export interface LeaseFormData {
   property_id: string;
   tenant_id: string;
   start_date: string;
-  end_date: string;
+  end_date?: string;
   monthly_rent: number;
   advance_paid: number;
 }
@@ -121,7 +122,7 @@ export interface PaymentFormData {
   month: number;
   year: number;
   payment_date: string;
-  notes: string;
+  notes?: string;
 }
 
 // Dashboard/Report types

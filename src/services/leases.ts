@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { getSupabase } from './supabase';
 import { advanceTransactionsService } from './advanceTransactions';
 import type {
   Lease,
@@ -11,7 +11,7 @@ export const leasesService = {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    const { data, error, count } = await supabase
+    const { data, error, count } = await getSupabase()
       .from('leases')
       .select(`
         *,
@@ -33,7 +33,7 @@ export const leasesService = {
   },
 
   async getById(id: string): Promise<Lease | null> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('leases')
       .select(`
         *,
@@ -48,7 +48,7 @@ export const leasesService = {
   },
 
   async getByProperty(propertyId: string): Promise<Lease[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('leases')
       .select(`
         *,
@@ -63,7 +63,7 @@ export const leasesService = {
   },
 
   async getActiveByProperty(propertyId: string): Promise<Lease | null> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('leases')
       .select(`
         *,
@@ -79,10 +79,10 @@ export const leasesService = {
   },
 
   async create(lease: LeaseFormData): Promise<Lease> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await getSupabase().auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('leases')
       .insert({
         ...lease,
@@ -113,7 +113,7 @@ export const leasesService = {
   },
 
   async update(id: string, updates: Partial<LeaseFormData>): Promise<Lease> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('leases')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', id)
@@ -129,7 +129,7 @@ export const leasesService = {
   },
 
   async updateAdvanceBalance(leaseId: string, newBalance: number): Promise<void> {
-    const { error } = await supabase
+    const { error } = await getSupabase()
       .from('leases')
       .update({ advance_balance: newBalance, updated_at: new Date().toISOString() })
       .eq('id', leaseId);
@@ -138,7 +138,7 @@ export const leasesService = {
   },
 
   async delete(id: string): Promise<void> {
-    const { error } = await supabase
+    const { error } = await getSupabase()
       .from('leases')
       .delete()
       .eq('id', id);

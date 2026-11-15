@@ -1,6 +1,5 @@
-import { supabase } from './supabase';
+import { getSupabase } from './supabase';
 import { advanceTransactionsService } from './advanceTransactions';
-import { leasesService } from './leases';
 import type {
   DashboardStats,
   MonthlyCollection,
@@ -8,17 +7,21 @@ import type {
   AdvanceUtilization,
 } from '@/types';
 
+function joinedName(join: {name: string} | {name: string}[] | null) {
+  return (Array.isArray(join) ? join[0] : join)?.name || 'Unknown';
+}
+
 export const reportsService = {
   async getDashboardStats(): Promise<DashboardStats> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await getSupabase().auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
-    const { data: properties } = await supabase
+    const { data: properties } = await getSupabase()
       .from('properties')
       .select('id, status, monthly_rent')
       .eq('owner_id', user.id);
 
-    const { data: leases } = await supabase
+    const { data: leases } = await getSupabase()
       .from('leases')
       .select('id, monthly_rent, advance_balance, property_id')
       .eq('owner_id', user.id)
@@ -28,7 +31,7 @@ export const reportsService = {
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
 
-    const { data: currentMonthPayments } = await supabase
+    const { data: currentMonthPayments } = await getSupabase()
       .from('payments')
       .select('amount, status, lease_id')
       .eq('owner_id', user.id)
@@ -72,17 +75,17 @@ export const reportsService = {
   },
 
   async getMonthlyCollections(year: number): Promise<MonthlyCollection[]> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await getSupabase().auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
-    const { data: payments } = await supabase
+    const { data: payments } = await getSupabase()
       .from('payments')
       .select('amount, month, status')
       .eq('owner_id', user.id)
       .eq('year', year)
       .eq('payment_type', 'rent');
 
-    const { data: leases } = await supabase
+    const { data: leases } = await getSupabase()
       .from('leases')
       .select('monthly_rent')
       .eq('owner_id', user.id)
@@ -110,14 +113,14 @@ export const reportsService = {
   },
 
   async getOutstandingDues(): Promise<OutstandingDue[]> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await getSupabase().auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
 
-    const { data: leases } = await supabase
+    const { data: leases } = await getSupabase()
       .from('leases')
       .select(`
         id,
@@ -129,7 +132,7 @@ export const reportsService = {
       .eq('owner_id', user.id)
       .eq('status', 'active');
 
-    const { data: payments } = await supabase
+    const { data: payments } = await getSupabase()
       .from('payments')
       .select('lease_id, amount, status')
       .eq('owner_id', user.id)
@@ -147,8 +150,8 @@ export const reportsService = {
       if (amountDue > 0) {
         outstanding.push({
           lease_id: lease.id,
-          property_name: lease.property?.name || 'Unknown',
-          tenant_name: lease.tenant?.name || 'Unknown',
+          property_name: joinedName(lease.property),
+          tenant_name: joinedName(lease.tenant),
           months_due: 1,
           amount_due: amountDue,
           advance_balance: lease.advance_balance,
@@ -160,10 +163,10 @@ export const reportsService = {
   },
 
   async getAdvanceUtilization(): Promise<AdvanceUtilization[]> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await getSupabase().auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
-    const { data: leases } = await supabase
+    const { data: leases } = await getSupabase()
       .from('leases')
       .select(`
         id,
@@ -184,8 +187,8 @@ export const reportsService = {
 
       utilization.push({
         lease_id: lease.id,
-        property_name: lease.property?.name || 'Unknown',
-        tenant_name: lease.tenant?.name || 'Unknown',
+        property_name: joinedName(lease.property),
+        tenant_name: joinedName(lease.tenant),
         initial_advance: lease.advance_paid,
         current_balance: lease.advance_balance,
         total_used: totalUsed,

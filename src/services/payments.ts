@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { getSupabase } from './supabase';
 import { leasesService } from './leases';
 import { advanceTransactionsService } from './advanceTransactions';
 import type {
@@ -12,7 +12,7 @@ export const paymentsService = {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    let query = supabase
+    let query = getSupabase()
       .from('payments')
       .select(`
         *,
@@ -47,7 +47,7 @@ export const paymentsService = {
   },
 
   async getById(id: string): Promise<Payment | null> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('payments')
       .select(`
         *,
@@ -63,7 +63,7 @@ export const paymentsService = {
   },
 
   async getByLease(leaseId: string): Promise<Payment[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('payments')
       .select(`
         *,
@@ -79,7 +79,7 @@ export const paymentsService = {
   },
 
   async getByMonthYear(month: number, year: number): Promise<Payment[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('payments')
       .select(`
         *,
@@ -96,10 +96,10 @@ export const paymentsService = {
   },
 
   async create(payment: PaymentFormData): Promise<Payment> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await getSupabase().auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
-    const { data: lease } = await supabase
+    const { data: lease } = await getSupabase()
       .from('leases')
       .select('property_id, tenant_id, monthly_rent, advance_balance')
       .eq('id', payment.lease_id)
@@ -125,7 +125,7 @@ export const paymentsService = {
       }
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('payments')
       .insert({
         ...payment,
@@ -160,7 +160,7 @@ export const paymentsService = {
   },
 
   async update(id: string, updates: Partial<PaymentFormData>): Promise<Payment> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabase()
       .from('payments')
       .update(updates)
       .eq('id', id)
@@ -177,14 +177,14 @@ export const paymentsService = {
   },
 
   async delete(id: string): Promise<void> {
-    const { data: payment } = await supabase
+    const { data: payment } = await getSupabase()
       .from('payments')
       .select('*')
       .eq('id', id)
       .single();
 
     if (payment?.status === 'advance_used' && payment.payment_type === 'rent') {
-      const { data: advTx } = await supabase
+      const { data: advTx } = await getSupabase()
         .from('advance_transactions')
         .select('*')
         .eq('lease_id', payment.lease_id)
@@ -196,7 +196,7 @@ export const paymentsService = {
 
       if (advTx) {
         await advanceTransactionsService.delete(advTx.id);
-        const { data: lease } = await supabase
+        const { data: lease } = await getSupabase()
           .from('leases')
           .select('advance_balance')
           .eq('id', payment.lease_id)
@@ -208,7 +208,7 @@ export const paymentsService = {
       }
     }
 
-    const { error } = await supabase
+    const { error } = await getSupabase()
       .from('payments')
       .delete()
       .eq('id', id);
