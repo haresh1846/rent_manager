@@ -37,7 +37,7 @@ async function build(force = false) {
   if (!force && existsSync(join(output, 'index.html')) && existsSync(stamp) && readFileSync(stamp, 'utf8') === hash) return;
 
   rmSync(stamp, { force: true });
-  console.log('Building Rent Manager with the installed Expo tools…');
+  console.log('Building Rentfold with the installed Expo tools…');
   await new Promise((resolve, reject) => {
     const cli = require.resolve('expo/bin/cli');
     const child = spawn(process.execPath, [cli, 'export', '--platform', 'web', '--output-dir', output], {
@@ -49,6 +49,9 @@ async function build(force = false) {
     child.once('error', reject);
     child.once('exit', code => code === 0 ? resolve() : reject(new Error('Expo export failed. See the build output above.')));
   });
+  const index = join(output, 'index.html');
+  const html = readFileSync(index, 'utf8');
+  writeFileSync(index, html.replace('</head>', '<meta name="rentfold-build" content="' + hash + '"></head>'));
   mkdirSync(join(project, '.expo'), {recursive:true});
   writeFileSync(stamp, hash);
 }
@@ -63,7 +66,10 @@ function start() {
       return res.writeHead(307, { Location: origin + req.url }).end();
     }
     if (req.headers.host !== host + ':' + port) return res.writeHead(400).end();
-    if (!ready) return res.writeHead(503, { Refresh: '2', 'Retry-After': '2' }).end('Starting Rent Manager…');
+    if (!ready) return res.writeHead(503, { Refresh: '2', 'Retry-After': '2' }).end('Starting Rentfold…');
+    if (req.method === 'HEAD' && req.url === '/' && existsSync(stamp)) {
+      res.setHeader('X-Rentfold-Build', readFileSync(stamp, 'utf8').trim());
+    }
     // The local ledger and its assets require only this origin.
     res.setHeader('Content-Security-Policy', "connect-src 'self'; object-src 'none'; base-uri 'self'");
     let pathname;
@@ -81,7 +87,19 @@ function start() {
       try {
         const current = await fetch(origin, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
         if (current.headers.get('X-Rent-Manager') === 'local') {
-          console.log('Rent Manager is already running at ' + origin + '/');
+          if (current.status === 503) {
+            console.log('Rentfold is starting at ' + origin + '/');
+          } else {
+            const hash = sourceHash();
+            let currentBuild = current.headers.get('X-Rentfold-Build');
+            if (!currentBuild) {
+              // Older launchers serve the updated dist folder, but don't send a build header.
+              const home = await fetch(origin, { signal: AbortSignal.timeout(3000) });
+              currentBuild = /<meta name="rentfold-build" content="([a-f0-9]{64})"/.exec(await home.text())?.[1];
+            }
+            console.log(currentBuild === hash ? 'Rentfold is already running at ' + origin + '/'
+              : 'An earlier build is running at ' + origin + '/. Stop its terminal with Ctrl+C and run npm start again to load your changes.');
+          }
           return;
         }
       } catch { /* The occupied port does not serve Rent Manager. */ }
@@ -93,7 +111,7 @@ function start() {
     try {
       await build();
       ready = true;
-      console.log('Rent Manager is ready at ' + origin + '/');
+      console.log('Rentfold is ready at ' + origin + '/');
     } catch (error) {
       console.error(error.message);
       process.exitCode = 1;

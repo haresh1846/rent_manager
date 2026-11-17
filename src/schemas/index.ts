@@ -45,7 +45,9 @@ export const leaseSchema = z
 export const paymentSchema = z.object({
   lease_id: z.string().uuid('Invalid lease'),
   amount: positiveAmount,
-  payment_type: z.enum(['rent', 'advance', 'security_deposit', 'maintenance', 'other']),
+  payment_type: z.enum([
+    'rent', 'advance', 'security_deposit', 'maintenance', 'other', 'advance_refund', 'deposit_refund', 'deposit_deduction',
+  ]),
   month: z.number().int().min(1).max(12),
   year: z.number().int().min(1900).max(9999),
   payment_date: calendarDate,
@@ -94,7 +96,7 @@ export type LeaseFormData = {
 export type PaymentFormData = {
   lease_id: string;
   amount: number;
-  payment_type: 'rent' | 'advance' | 'security_deposit' | 'maintenance' | 'other';
+  payment_type: z.infer<typeof paymentSchema>['payment_type'];
   month: number;
   year: number;
   payment_date: string;

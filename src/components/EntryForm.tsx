@@ -1,9 +1,10 @@
-import { useRef, useState, type ReactNode } from 'react';
-import { View } from 'react-native';
+import { Children, useRef, useState, type ReactNode } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useLedger } from '@/ledger';
-import { Action, Body, Card, Choices, Field, Header, Notice, Page, styles } from './ui';
-import { BackAction, cap, localDate, money } from './portfolio';
+import { calculateMonth, fundBalances, useLedger, usesAdvance } from '@/ledger';
+import { billingMonthParam } from '@/ledger/model';
+import { Action, Body, Card, Choices, Field, Header, Icon, Notice, Page, palette, styles } from './ui';
+import { BackAction, cap, localDate, money, periodName, prettyDate } from './portfolio';
 import type { PaymentType, PropertyType } from '@/types';
 
 type Section = 'properties' | 'tenants' | 'leases' | 'payments' | 'maintenance';
@@ -39,6 +40,28 @@ function isoDay(value: string, label: string) {
   return value;
 }
 const paymentTypes = ['rent', 'advance', 'security_deposit', 'maintenance', 'other'] as const;
+const settlementTypes = ['advance_refund', 'deposit_refund', 'deposit_deduction'] as const;
+type EntryType = PaymentType | 'apply_advance';
+function isSettlementType(value: string | undefined): value is (typeof settlementTypes)[number] {
+  return settlementTypes.some(type => type === value);
+}
+
+function FormPair({ children }: { children: ReactNode }) {
+  return (
+    <View style={form.pair}>
+      {Children.map(children, (child) => child && <View style={form.pairedField}>{child}</View>)}
+    </View>
+  );
+}
+
+function HeldFund({ label, value }: { label: string; value: number }) {
+  return (
+    <View style={form.fund}>
+      <Text style={form.caption}>{label}</Text>
+      <Text style={form.fundAmount}>{money(value)}</Text>
+    </View>
+  );
+}
 export default function EntryForm({
   section,
   editing = false,
@@ -47,7 +70,9 @@ export default function EntryForm({
   editing?: boolean;
 }) {
   const router = useRouter();
-  const params = useLocalSearchParams<{ lease?: string; id?: string }>();
+  const params = useLocalSearchParams<{
+    lease?: string; id?: string; month?: string; amount?: string; type?: string; replaces?: string; from?: string; tenant?: string;
+  }>();
   const ledger = useLedger();
   const { data } = ledger;
   const existingProperty =
@@ -58,22 +83,29 @@ export default function EntryForm({
     editing && section === 'tenants' ? data.tenants.find((t) => t.id === params.id) : undefined;
   const [openedRevision] = useState(existingProperty?.updated_at ?? existingTenant?.updated_at);
   const today = localDate();
+  const original = section === 'payments' && params.replaces
+    ? data.payments.find(p => p.id === params.replaces) : undefined;
+  const initialMonth = original ? original.year + '-' + String(original.month).padStart(2, '0')
+    : billingMonthParam(params.month) ?? today.slice(0, 7);
+  const initialType: EntryType = original ? usesAdvance(original) ? 'apply_advance' : original.payment_type
+    : isSettlementType(params.type) ? params.type : 'rent';
   const [name, setName] = useState(existingProperty?.name ?? existingTenant?.name ?? ''),
     [address, setAddress] = useState(existingProperty?.address ?? ''),
     [rent, setRent] = useState(existingProperty ? String(existingProperty.monthly_rent) : ''),
     [propertyType, setPropertyType] = useState<PropertyType>(existingProperty?.type ?? 'house');
   const [email, setEmail] = useState(existingTenant?.email ?? ''),
     [phone, setPhone] = useState(existingTenant?.phone ?? ''),
-    [notes, setNotes] = useState(existingTenant?.notes ?? '');
+    [notes, setNotes] = useState(original?.notes ?? existingTenant?.notes ?? '');
   const [propertyId, setProperty] = useState(''),
     [tenantId, setTenant] = useState('');
-  const [leaseId, setLease] = useState(params.lease || ''),
+  const [leaseId, setLease] = useState(original?.lease_id ?? params.lease ?? ''),
     [advance, setAdvance] = useState('0'),
-    [date, setDate] = useState(today),
+    [date, setDate] = useState(original && original.payment_date <= today ? original.payment_date : today),
     [end, setEnd] = useState('');
-  const [month, setMonth] = useState(today.slice(0, 7)),
-    [paymentType, setType] = useState<PaymentType | 'apply_advance'>('rent'),
-    [amount, setAmount] = useState('');
+  const [month, setMonth] = useState(initialMonth),
+    [paymentType, setType] = useState<EntryType>(initialType),
+    [amount, setAmount] = useState(original ? String(original.amount) : params.amount ?? '');
+  const isSettlement = isSettlementType(paymentType);
   const [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
   const saving = useRef(false);
@@ -83,7 +115,17 @@ export default function EntryForm({
     | '/leases'
     | '/payments'
     | '/maintenance';
-  const goBack = () => router.replace(target);
+  const returnScreen = section === 'payments' && ['leases', 'arrears', 'statement', 'reports', 'overview'].includes(params.from ?? '')
+    ? params.from : section;
+  function goToList(billingMonth: string) {
+    if (returnScreen === 'statement' && params.tenant) router.replace({ pathname: '/tenants/[id]/statement', params: { id: params.tenant } });
+    else if (returnScreen === 'overview') router.replace('/');
+    else if (returnScreen === 'reports') router.replace({ pathname: '/reports', params: { month: billingMonth } });
+    else if (returnScreen === 'leases' || returnScreen === 'arrears') router.replace('/' + returnScreen as '/leases' | '/arrears');
+    else if (section === 'payments') router.replace({ pathname: '/payments', params: { month: billingMonth } });
+    else router.replace(target);
+  }
+  const goBack = () => goToList(initialMonth);
   const props = data.properties.map((p) => ({ value: p.id, label: p.name }));
   const tenants = data.tenants.map((t) => ({ value: t.id, label: t.name }));
   const leases = data.leases.map((l) => ({
@@ -97,13 +139,22 @@ export default function EntryForm({
       .join(' · '),
   }));
   const selectedLease = data.leases.find((l) => l.id === leaseId);
+  const funds = selectedLease ? fundBalances(data, selectedLease) : undefined;
+  const [billingYear, billingNumber] = month.split('-').map(Number);
+  const rentRow = section === 'payments' && billingMonthParam(month) && selectedLease &&
+    (paymentType === 'rent' || paymentType === 'apply_advance')
+    ? calculateMonth(data, billingYear, billingNumber).rows.find(row => row.lease.id === selectedLease.id)
+    : undefined;
   function selectProperty(id: string) {
     setProperty(id);
     if (section === 'leases')
       setRent(String(data.properties.find((p) => p.id === id)?.monthly_rent ?? ''));
   }
   let fallback: ReactNode;
-  if (editing && !existingProperty && !existingTenant) {
+  if (section === 'payments' && params.replaces &&
+    (!original?.reversal || data.payments.some(p => p.replaces_payment_id === original.id))) {
+    fallback = <Notice tone="error">This payment is unavailable for replacement. Check its history in Payments.</Notice>;
+  } else if (editing && !existingProperty && !existingTenant) {
     fallback = <Notice tone="error">This record is unavailable in your workspace.</Notice>;
   } else if (section === 'leases' && (!props.length || !tenants.length)) {
     fallback = (
@@ -172,12 +223,12 @@ export default function EntryForm({
         });
       if (section === 'payments') {
         required(leaseId, 'Lease');
-        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
+        if (!billingMonthParam(month))
           throw new Error('Enter the billing month as YYYY-MM.');
         const [year, billingMonth] = month.split('-').map(Number);
         const value = amountValue(amount, 'amount');
         if (paymentType === 'apply_advance')
-          await ledger.applyAdvance(leaseId, year, billingMonth, value);
+          await ledger.applyAdvance(leaseId, year, billingMonth, value, original?.id);
         else
           await ledger.addPayment({
             lease_id: leaseId,
@@ -187,7 +238,7 @@ export default function EntryForm({
             payment_type: paymentType,
             payment_date: isoDay(date, 'the payment date'),
             notes: notes.trim() || undefined,
-          });
+          }, original?.id);
       }
       if (section === 'maintenance')
         await ledger.addMaintenance({
@@ -195,7 +246,7 @@ export default function EntryForm({
           title: required(name, 'Request title'),
           description: notes.trim() || undefined,
         });
-      goBack();
+      goToList(month);
     } catch (e) {
       setError(
         e instanceof Error
@@ -219,29 +270,31 @@ export default function EntryForm({
   );
   return (
     <Page narrow>
-      <BackAction label={'Back to ' + section} onPress={goBack} />
-      <Header title={editing ? 'Edit ' + spec[section].name : spec[section].title} />
-      <Card style={{ gap: 17 }}>
+      <BackAction label={'Back to ' + returnScreen} onPress={goBack} />
+      <Header title={original ? 'Replace payment' : editing ? 'Edit ' + spec[section].name : spec[section].title} />
+      <Card style={form.card}>
         {fallback || (
           <>
             {section === 'properties' && (
               <>
-                <Field
-                  label="Property name"
-                  placeholder="e.g. River Road House"
-                  value={name}
-                  onChangeText={setName}
-                  maxLength={100}
-                />
-                <Choices
-                  label="Property type"
-                  value={propertyType}
-                  onChange={setPropertyType}
-                  options={[
-                    { label: 'House', value: 'house' },
-                    { label: 'Shop', value: 'shop' },
-                  ]}
-                />
+                <FormPair>
+                  <Field
+                    label="Property name"
+                    placeholder="e.g. River Road House"
+                    value={name}
+                    onChangeText={setName}
+                    maxLength={100}
+                  />
+                  <Choices
+                    label="Property type"
+                    value={propertyType}
+                    onChange={setPropertyType}
+                    options={[
+                      { label: 'House', value: 'house' },
+                      { label: 'Shop', value: 'shop' },
+                    ]}
+                  />
+                </FormPair>
                 <Field label="Address" value={address} onChangeText={setAddress} maxLength={500} />
                 <Field
                   label="Asking rent per month (₹)"
@@ -255,20 +308,22 @@ export default function EntryForm({
             {section === 'tenants' && (
               <>
                 <Field label="Tenant name" value={name} onChangeText={setName} maxLength={100} />
-                <Field
-                  label="Phone (optional)"
-                  keyboardType="phone-pad"
-                  value={phone}
-                  onChangeText={setPhone}
-                  maxLength={32}
-                />
-                <Field
-                  label="Email (optional)"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  value={email}
-                  onChangeText={setEmail}
-                />
+                <FormPair>
+                  <Field
+                    label="Phone (optional)"
+                    keyboardType="phone-pad"
+                    value={phone}
+                    onChangeText={setPhone}
+                    maxLength={32}
+                  />
+                  <Field
+                    label="Email (optional)"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    value={email}
+                    onChangeText={setEmail}
+                  />
+                </FormPair>
                 <Field label="Notes (optional)" multiline value={notes} onChangeText={setNotes} />
               </>
             )}
@@ -283,59 +338,82 @@ export default function EntryForm({
             {section === 'leases' && (
               <>
                 <Choices label="Tenant" value={tenantId} onChange={setTenant} options={tenants} />
-                {dateField('Start date', date, setDate)}
-                {dateField('End date (optional)', end, setEnd)}
-                <Field
-                  label="Monthly rent (₹)"
-                  keyboardType="decimal-pad"
-                  value={rent}
-                  onChangeText={setRent}
-                />
-                <Field
-                  label="Opening advance (₹)"
-                  keyboardType="decimal-pad"
-                  value={advance}
-                  onChangeText={setAdvance}
-                />
+                <FormPair>
+                  {dateField('Start date', date, setDate)}
+                  {dateField('End date (optional)', end, setEnd)}
+                </FormPair>
+                <FormPair>
+                  <Field
+                    label="Monthly rent (₹)"
+                    keyboardType="decimal-pad"
+                    value={rent}
+                    onChangeText={setRent}
+                  />
+                  <Field
+                    label="Opening advance (₹)"
+                    keyboardType="decimal-pad"
+                    value={advance}
+                    onChangeText={setAdvance}
+                  />
+                </FormPair>
                 <Body muted>Rent is billed in full for each calendar month the lease covers.</Body>
               </>
             )}
             {section === 'payments' && (
               <>
+                {original && <Notice>Replacing the reversed {money(original.amount)} entry dated {prettyDate(original.payment_date)}. Both entries will remain in the history.</Notice>}
                 <Choices label="Lease" value={leaseId} onChange={setLease} options={leases} />
+                {selectedLease && funds && (
+                  <View style={form.balance}>
+                    <View style={form.balanceTop}>
+                      <View style={form.balanceLabel}>
+                        <Icon name="file-text" size={16} color={palette.moss} />
+                        <View style={form.balancePeriod}>
+                          <Text style={form.balanceTitle}>{rentRow ? 'Rent outstanding' : 'Monthly rent'}</Text>
+                          <Text style={form.caption}>
+                            {rentRow ? periodName(billingYear, billingNumber) : 'Lease from ' + prettyDate(selectedLease.start_date)}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={form.rentAmount}>{money(rentRow ? rentRow.outstanding : selectedLease.monthly_rent)}</Text>
+                    </View>
+                    <View style={form.funds}>
+                      <HeldFund label="Available advance" value={funds.advance} />
+                      <HeldFund label="Deposit held" value={funds.deposit} />
+                    </View>
+                  </View>
+                )}
+                <Choices label="Transaction" value={isSettlement ? 'settlement' : 'receipt'}
+                  options={[{ label: 'Receive or apply funds', value: 'receipt' }, { label: 'Refund or deduct', value: 'settlement' }]}
+                  onChange={mode => setType(mode === 'settlement' ? 'advance_refund' : 'rent')} />
                 <Choices
                   label="Payment type"
                   value={paymentType}
                   onChange={setType}
-                  options={[
+                  options={isSettlement ? settlementTypes.map(value => ({ label: cap(value), value })) : [
                     ...paymentTypes.map((value) => ({ label: cap(value), value })),
                     { label: 'Apply advance to rent', value: 'apply_advance' },
                   ]}
                 />
-                {selectedLease && (
-                  <Body muted>
-                    Monthly rent {money(selectedLease.monthly_rent)} · Available advance{' '}
-                    {money(selectedLease.advance_balance)}
-                  </Body>
-                )}
                 <Field
                   label="Amount (₹)"
                   keyboardType="decimal-pad"
                   value={amount}
                   onChangeText={setAmount}
                 />
-                <Field
-                  label="Billing month"
-                  placeholder="YYYY-MM"
-                  value={month}
-                  onChangeText={setMonth}
-                  maxLength={7}
-                />
+                <FormPair>
+                  <Field
+                    label="Billing month"
+                    placeholder="YYYY-MM"
+                    value={month}
+                    onChangeText={setMonth}
+                    maxLength={7}
+                  />
+                  {paymentType !== 'apply_advance' && dateField('Payment date', date, setDate)}
+                </FormPair>
                 {paymentType !== 'apply_advance' && (
-                  <>
-                    {dateField('Payment date', date, setDate)}
-                    <Field label="Payment note (optional)" value={notes} onChangeText={setNotes} />
-                  </>
+                  <Field label={paymentType === 'deposit_deduction' ? 'Reason for deduction' : 'Payment note (optional)'}
+                    value={notes} onChangeText={setNotes} />
                 )}
               </>
             )}
@@ -357,9 +435,10 @@ export default function EntryForm({
               </>
             )}
             {!!error && <Notice tone="error">{error}</Notice>}
-            <View style={styles.wrap}>
+            <View style={[styles.wrap, form.footer]}>
               <Action
-                label={busy ? 'Saving…' : spec[section].verb}
+                label={busy ? 'Saving…' : original ? 'Save replacement' : spec[section].verb}
+                icon="check"
                 disabled={busy}
                 onPress={() => void save()}
               />
@@ -371,3 +450,20 @@ export default function EntryForm({
     </Page>
   );
 }
+
+const form = StyleSheet.create({
+  card: { gap: 20 },
+  pair: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 16 },
+  pairedField: { flexBasis: 220, flexGrow: 1, flexShrink: 1, minWidth: 0 },
+  balance: { padding: 16, gap: 12, borderWidth: 1, borderColor: palette.sageDeep, borderRadius: 12, backgroundColor: palette.sage },
+  balanceTop: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  balanceLabel: { flexDirection: 'row', alignItems: 'center', gap: 9, minWidth: 0, flexShrink: 1 },
+  balancePeriod: { gap: 2, flexShrink: 1 },
+  balanceTitle: { color: palette.forest, fontWeight: '600', fontSize: 14, lineHeight: 19 },
+  caption: { color: palette.muted, fontSize: 12, lineHeight: 17 },
+  rentAmount: { color: palette.forest, fontSize: 24, lineHeight: 29, fontWeight: '600', fontVariant: ['tabular-nums'], letterSpacing: -0.7 },
+  funds: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, borderTopWidth: 1, borderTopColor: palette.sageDeep, paddingTop: 10 },
+  fund: { flexGrow: 1, flexBasis: 105, minWidth: 0, gap: 2 },
+  fundAmount: { fontSize: 15, lineHeight: 21, fontWeight: '600', color: palette.ink, fontVariant: ['tabular-nums'] },
+  footer: { borderTopWidth: 1, borderTopColor: palette.line, paddingTop: 16, gap: 12 },
+});

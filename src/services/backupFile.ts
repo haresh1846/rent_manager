@@ -1,6 +1,10 @@
 import { Directory, File } from 'expo-file-system';
 
 export async function saveBackupFile(text: string, filename: string): Promise<void> {
+  return saveLocalFile(text, filename, 'application/json');
+}
+
+export async function saveLocalFile(content: string | Uint8Array, filename: string, mimeType: string): Promise<void> {
   let directory: Directory;
   try {
     directory = await Directory.pickDirectoryAsync();
@@ -14,9 +18,9 @@ export async function saveBackupFile(text: string, filename: string): Promise<vo
     throw error;
   }
 
-  const file = directory.createFile(filename, 'application/json');
+  const file = directory.createFile(filename, mimeType);
   try {
-    await file.write(text);
+    await file.write(content);
   } catch (error) {
     // Only the new, incomplete export is removed. Preserve the write error if cleanup also fails.
     try { file.delete(); } catch { /* The selected folder may no longer be accessible. */ }

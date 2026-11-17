@@ -3,7 +3,8 @@
 export type PropertyType = 'shop' | 'house';
 export type PropertyStatus = 'vacant' | 'occupied' | 'maintenance';
 export type LeaseStatus = 'active' | 'expired' | 'terminated';
-export type PaymentType = 'rent' | 'advance' | 'security_deposit' | 'maintenance' | 'other';
+export type PaymentType = 'rent' | 'advance' | 'security_deposit' | 'maintenance' | 'other' |
+  'advance_refund' | 'deposit_refund' | 'deposit_deduction';
 export type PaymentStatus = 'paid' | 'partial' | 'pending' | 'advance_used';
 export type AdvanceTransactionType = 'credit' | 'debit';
 
@@ -62,6 +63,8 @@ export interface Payment {
   amount: number;
   payment_type: PaymentType;
   settlement_source?: 'cash' | 'advance';
+  reversal?: { reason: string; reversed_at: string };
+  replaces_payment_id?: string;
   month: number;
   year: number;
   status: PaymentStatus;

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Rent Manager",
+    "name": "Rentfold",
     "slug": "rent-manager",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -13,7 +13,7 @@
     "android": {
       "allowBackup": false,
       "adaptiveIcon": {
-        "backgroundColor": "#C6E6A4",
+        "backgroundColor": "#173C34",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },

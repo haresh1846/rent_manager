@@ -1,11 +1,12 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StyleSheet, Text, View } from 'react-native';
 import { Action, Body, Card, Label, Notice, SectionTitle, palette } from './ui';
 import { useLedger, type RestorePreview } from '@/ledger';
 import { useLocalWorkspace, type LocalWorkspace } from '@/providers';
 import { pickBackupFile, saveBackupFile } from '@/services/backupFile';
 
-type Operation = 'export' | 'choose' | 'restore';
+type Operation = 'export' | 'choose' | 'restore' | 'saveDamaged';
 
 const recordTypes = [
   ['properties', 'Properties'],
@@ -35,27 +36,44 @@ export default function WorkspaceBackup({ disabled, onBusyChange }: {
   const [pending, setPending] = useState<Operation | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [lastExport, setLastExport] = useState<string | null>(null);
   const inFlight = useRef(false);
+  const lastExportKey = '@rent-manager/' + workspace + '/last-backup-export';
+  useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(lastExportKey).then((saved) => {
+      if (mounted && saved && Number.isFinite(Date.parse(saved))) {
+        setLastExport(current => current && current > saved ? current : saved);
+      }
+    }).catch(() => {});
+    return () => { mounted = false; };
+  }, [lastExportKey]);
 
   async function run(action: Operation) {
-    if (disabled || inFlight.current || (action === 'restore' && !review)) return;
+    if (disabled || inFlight.current || ((action === 'restore' || action === 'saveDamaged') && !review)) return;
     inFlight.current = true;
     onBusyChange(true);
     setPending(action);
     setError('');
     setMessage('');
-    let reviewing = false;
+    let reviewing = action === 'saveDamaged';
     try {
-      if (action === 'export') {
-        const contents = await exportBackup();
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      if (action === 'export' || action === 'saveDamaged') {
+        const contents = action === 'export' ? await exportBackup() : review!.preview.baseline;
+        const issued = new Date().toISOString();
+        const timestamp = issued.replace(/[:.]/g, '-');
+        const filename = action === 'export' ? `rentfold-${workspace}-${timestamp}.json` : `rentfold-unreadable-${workspace}-${timestamp}.json`;
         try {
-          await saveBackupFile(contents, `rent-manager-${workspace}-${timestamp}.json`);
+          await saveBackupFile(contents, filename);
         } catch (cause) {
           if (cause && typeof cause === 'object' && 'name' in cause && cause.name === 'AbortError') return;
           throw cause;
         }
-        setMessage('Backup file prepared for saving.');
+        if (action === 'export') {
+          setLastExport(issued);
+          await AsyncStorage.setItem(lastExportKey, issued).catch(() => {});
+          setMessage('Backup file prepared for saving.');
+        } else setMessage('A copy of the unreadable data was prepared for saving.');
       } else if (action === 'choose') {
         const file = await pickBackupFile();
         if (!file) return;
@@ -93,6 +111,9 @@ export default function WorkspaceBackup({ disabled, onBusyChange }: {
         <>
           <View style={view.divider} />
           <SectionTitle>Review backup</SectionTitle>
+          {review.preview.currentCounts === null && (
+            <Notice>Current records could not be read. Recovering saves a separate copy of the damaged data on this device and replaces the workspace with this backup.</Notice>
+          )}
           <View style={view.details}>
             <Label>File</Label><Body>{review.filename}</Body>
             <Label>Created</Label><Body>{displayDate(review.preview.backup.exportedAt)}</Body>
@@ -106,23 +127,27 @@ export default function WorkspaceBackup({ disabled, onBusyChange }: {
             </View>
             {recordTypes.map(([key, label]) => (
               <View key={key} style={view.row} accessible accessibilityLabel={
-                `${label}, currently ${review.preview.currentCounts[key]}, backup ${review.preview.backup.ledger[key].length}`
+                `${label}, currently ${review.preview.currentCounts?.[key] ?? 'unavailable'}, backup ${review.preview.backup.ledger[key].length}`
               }>
                 <Text style={view.name}>{label}</Text>
-                <Text style={view.count}>{review.preview.currentCounts[key]}</Text>
+                <Text style={view.count}>{review.preview.currentCounts?.[key] ?? '—'}</Text>
                 <Text style={view.count}>{review.preview.backup.ledger[key].length}</Text>
               </View>
             ))}
           </View>
           <Notice>Restoring replaces every record in your {workspace === 'demo' ? 'sample' : 'personal'} workspace with the records in this file.</Notice>
           <View style={view.actions}>
+            {review.preview.currentCounts === null && (
+              <Action label="Save unreadable data to file" variant="secondary" disabled={blocked} onPress={() => void run('saveDamaged')} />
+            )}
             <Action label="Cancel" variant="secondary" disabled={blocked} onPress={cancel} />
-            <Action label={pending === 'restore' ? 'Restoring…' : 'Replace workspace records'} disabled={blocked} onPress={() => void run('restore')} />
+            <Action label={pending === 'restore' ? 'Restoring…' : review.preview.currentCounts === null ? 'Recover workspace' : 'Replace workspace records'} disabled={blocked} onPress={() => void run('restore')} />
           </View>
         </>
       ) : (
         <>
           <Body muted>Backups include tenant details and payment history. Save the JSON file in a private folder on your device.</Body>
+          {lastExport && <Body muted>Last backup prepared {displayDate(lastExport)}</Body>}
           <View style={view.actions}>
             <Action icon="download" label={pending === 'export' ? 'Preparing backup…' : 'Export backup'} variant="secondary" disabled={blocked} onPress={() => void run('export')} />
             <Action icon="upload" label={pending === 'choose' ? 'Reading backup…' : 'Restore from file'} variant="secondary" disabled={blocked} onPress={() => void run('choose')} />

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createDemoLedger } from '../src/ledger/demo.ts';
-import { applyCommand, calculateMonth, presentLedger, isLeaseCurrent } from '../src/ledger/model.ts';
+import { applyCommand, calculateMonth, localDate, presentLedger, isLeaseCurrent } from '../src/ledger/model.ts';
 import { createNativeLedgerStore, webDatabaseName } from '../src/ledger/workspace.ts';
 
 const now = new Date(2026, 10, 16, 12);
+const through = localDate(now);
 const owner = 'local-demo';
 const seed = () => createDemoLedger(now);
 const cmdId = '00000000-0000-4000-8000-000000000001';
@@ -54,13 +55,13 @@ function pay(data, amount, payment_type = 'rent', kind = 'payment') {
 
 test('demo rent and occupancy come from dated leases and payments', () => {
   const data = seed();
-  const { due, collected, outstanding, occupied, advanceBalance } = calculateMonth(data, 2026, 11);
+  const { due, collected, outstanding, occupied, advanceBalance } = calculateMonth(data, 2026, 11, through);
   assert.deepEqual(
     [due, collected, outstanding, occupied, advanceBalance],
     [42000, 30000, 12000, 2, 42000]
   );
-  assert.equal(calculateMonth(data, 2026, 10).due, 0);
-  assert.equal(calculateMonth(data, 2026, 12).collected, 0);
+  assert.equal(calculateMonth(data, 2026, 10, through).due, 0);
+  assert.equal(calculateMonth(data, 2026, 12, through).collected, 0);
   assert.deepEqual(
     presentLedger(data, '2026-10-30').properties.map((p) => p.status),
     ['vacant', 'vacant', 'vacant']
@@ -127,7 +128,7 @@ test('cash receipts and explicit advance usage settle rent once, exactly to the 
   let data = pay(seed(), 5999.99);
   const start = data.leases[0].advance_balance;
   data = pay(data, 6000.01, 'rent', 'apply_advance');
-  const report = calculateMonth(data, 2026, 11);
+  const report = calculateMonth(data, 2026, 11, through);
   assert.equal(report.outstanding, 0);
   assert.equal(report.collected, 42000);
   assert.equal(report.cashCollected, 35999.99);
@@ -139,7 +140,7 @@ test('top-ups and deposits stay out of rent collected', () => {
   let data = pay(seed(), 250, 'advance');
   data = pay(data, 100, 'security_deposit');
   assert.equal(data.leases[0].advance_balance, 24250);
-  assert.equal(calculateMonth(data, 2026, 11).collected, 30000);
+  assert.equal(calculateMonth(data, 2026, 11, through).collected, 30000);
 });
 test('prevents invalid amounts, over-application, and out-of-term rent', () => {
   const data = seed();
@@ -191,8 +192,8 @@ test('overlapping leases and invalid dates fail, move-out keeps historic rent', 
   assert.doesNotThrow(() =>
     applyCommand(ended, { kind: 'lease', input: { ...input, start_date: '2026-11-15' } }, owner, cmdId, now)
   );
-  assert.equal(calculateMonth(ended, 2026, 11).due, 42000);
-  assert.equal(calculateMonth(ended, 2026, 12).due, 18000);
+  assert.equal(calculateMonth(ended, 2026, 11, through).due, 42000);
+  assert.equal(calculateMonth(ended, 2026, 12, through).due, 18000);
   assert.equal(
     presentLedger(ended, '2026-11-16').properties.find((p) => p.id === lease.property_id).status,
     'vacant'

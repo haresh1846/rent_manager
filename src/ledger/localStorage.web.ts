@@ -1,6 +1,8 @@
 import type { LocalWorkspace } from '../providers';
 import type { Ledger } from './model';
-import { initialLedger, webDatabaseName, type EditLedger } from './workspace';
+import {
+  checkStoredLedger, initialLedger, staleRecovery, webDatabaseName, type EditLedger, type Recovery,
+} from './workspace';
 
 const connections = new Map<LocalWorkspace, Promise<IDBDatabase>>();
 function openDatabase(workspace: LocalWorkspace) {
@@ -28,7 +30,9 @@ function openDatabase(workspace: LocalWorkspace) {
 }
 
 // IndexedDB serializes read/write transactions across browser tabs on the same origin.
-export async function modifyLocalLedger(workspace: LocalWorkspace, edit?: EditLedger): Promise<Ledger> {
+export async function modifyLocalLedger(
+  workspace: LocalWorkspace, edit?: EditLedger, recovery?: Recovery,
+): Promise<Ledger> {
   const db = await openDatabase(workspace);
   return new Promise((resolve, reject) => {
     const tx = db.transaction('ledger', 'readwrite');
@@ -39,9 +43,17 @@ export async function modifyLocalLedger(workspace: LocalWorkspace, edit?: EditLe
     tx.onabort = () => reject(tx.error ?? new Error('The local workspace could not be saved.'));
     read.onsuccess = () => {
       try {
-        const data: Ledger = read.result ?? initialLedger(workspace);
+        if (recovery) {
+          if (JSON.stringify(read.result) !== recovery.original) throw new Error(staleRecovery);
+          store.add(read.result, 'recovery/' + crypto.randomUUID());
+          result = recovery.replacement;
+          store.put(result, 'portfolio');
+          return;
+        }
+        const data: unknown = read.result === undefined ? initialLedger(workspace) : read.result;
+        checkStoredLedger(data);
         result = edit ? edit(data) : data;
-        if (edit || !read.result) store.put(result, 'portfolio');
+        if (edit || read.result === undefined) store.put(result, 'portfolio');
       } catch (error) {
         tx.abort();
         reject(error);

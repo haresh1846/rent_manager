@@ -1,5 +1,9 @@
 export async function saveBackupFile(text: string, filename: string): Promise<void> {
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  return saveLocalFile(text, filename, 'application/json');
+}
+
+export async function saveLocalFile(content: string | Uint8Array<ArrayBuffer>, filename: string, mimeType: string): Promise<void> {
+  const url = URL.createObjectURL(new Blob([content], { type: mimeType }));
   const link = document.createElement('a');
   link.href = url;
   link.download = filename;

@@ -35,7 +35,8 @@ export type Command =
   | { kind: 'update_tenant'; input: TenantFormData & { id: string; expected_updated_at?: string } }
   | { kind: 'lease'; input: LeaseFormData }
   | { kind: 'end_lease'; input: { id: string; end_date: string } }
-  | { kind: 'payment' | 'apply_advance'; input: PaymentFormData }
+  | { kind: 'payment' | 'apply_advance'; input: PaymentFormData; replaces?: string }
+  | { kind: 'reverse_payment'; input: { id: string; reason: string } }
   | { kind: 'maintenance'; input: MaintenanceInput }
   | { kind: 'maintenance_status'; input: { id: string; status: Maintenance['status'] } };
 
@@ -51,21 +52,106 @@ export function localDate(date = new Date()) {
   ].join('-');
 }
 
+export function billingMonthParam(value: unknown): string | undefined {
+  return typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value) && Number(value.slice(0, 4)) >= 1900
+    ? value : undefined;
+}
+
 function cents(amount: number) {
   return Math.round(amount * 100);
 }
 function nextRevision(previous: string, now: Date) {
   return new Date(Math.max(now.getTime(), Date.parse(previous) + 1)).toISOString();
 }
-function belongsToPeriod(lease: Lease, period: string) {
+export function belongsToPeriod(lease: Lease, period: string) {
   return (
     lease.start_date.slice(0, 7) <= period &&
     (lease.end_date ? lease.end_date.slice(0, 7) >= period : lease.status !== 'terminated')
   );
 }
 
+export function isPostedPayment(payment: Payment) {
+  return payment.status !== 'pending' && !payment.reversal;
+}
+
+export function usesAdvance(payment: Payment) {
+  return payment.settlement_source === 'advance' ||
+    (!payment.settlement_source && payment.status === 'advance_used');
+}
+
+export function advanceMovement(payment: Payment) {
+  if (payment.payment_type === 'advance') return payment.amount;
+  if (payment.payment_type === 'advance_refund' || (payment.payment_type === 'rent' && usesAdvance(payment)))
+    return -payment.amount;
+  return 0;
+}
+
+export function depositMovement(payment: Payment) {
+  if (payment.payment_type === 'security_deposit') return payment.amount;
+  if (payment.payment_type === 'deposit_refund' || payment.payment_type === 'deposit_deduction')
+    return -payment.amount;
+  return 0;
+}
+
+export function isCashRefund(payment: Payment) {
+  return payment.payment_type === 'advance_refund' || payment.payment_type === 'deposit_refund';
+}
+
+export function calculateCashMonth(data: Ledger, period: string, through = localDate()) {
+  const receipts = data.payments
+    .filter(p => isPostedPayment(p) && p.payment_date <= through && p.payment_date.slice(0, 7) === period &&
+      !usesAdvance(p) && p.payment_type !== 'deposit_deduction')
+    .sort((a, b) => b.payment_date.localeCompare(a.payment_date) || b.created_at.localeCompare(a.created_at));
+  let received = 0, refunded = 0;
+  for (const payment of receipts) {
+    if (isCashRefund(payment)) refunded += cents(payment.amount);
+    else received += cents(payment.amount);
+  }
+  return { receipts, received: received / 100, refunded: refunded / 100, net: (received - refunded) / 100 };
+}
+
+export function fundBalances(data: Ledger, lease: Lease, through = localDate()) {
+  let advance = cents(lease.advance_balance), deposit = 0;
+  for (const payment of data.payments) {
+    if (payment.lease_id !== lease.id || !isPostedPayment(payment)) continue;
+    if (payment.payment_date > through) advance -= cents(advanceMovement(payment));
+    else deposit += cents(depositMovement(payment));
+  }
+  return { advance: advance / 100, deposit: deposit / 100 };
+}
+
+// Backdating a withdrawal can overdraw a balance between two later receipts, even if today's total covers it.
+function revisedAdvanceBalance(data: Ledger, lease: Lease, payment: Payment, direction: 1 | -1) {
+  if (!isPostedPayment(payment)) return lease.advance_balance;
+  const advanceChange = direction * cents(advanceMovement(payment));
+  const depositChange = direction * cents(depositMovement(payment));
+  if (!advanceChange && !depositChange) return lease.advance_balance;
+  const initial = fundBalances(data, lease, payment.payment_date);
+  let balance = advanceChange ? cents(initial.advance) + advanceChange : cents(initial.deposit) + depositChange;
+  const later = new Map<string, number>();
+  for (const entry of data.payments) {
+    if (entry.lease_id !== lease.id || !isPostedPayment(entry) || entry.payment_date <= payment.payment_date) continue;
+    const change = cents(advanceChange ? advanceMovement(entry) : depositMovement(entry));
+    if (change) later.set(entry.payment_date, (later.get(entry.payment_date) ?? 0) + change);
+  }
+  function check() {
+    if (balance < 0) {
+      const fund = advanceChange ? 'available advance' : 'held security deposit';
+      throw new Error(direction === 1 ? 'Amount exceeds the ' + fund + ' for these dates.'
+        : 'This reversal would overdraw the ' + fund + '. Reverse the related withdrawals first.');
+    }
+    if (balance > 999999999999) throw new Error('The resulting balance exceeds the supported amount.');
+  }
+  check();
+  for (const date of [...later.keys()].sort()) {
+    balance += later.get(date)!;
+    check();
+  }
+  return (cents(lease.advance_balance) + advanceChange) / 100;
+}
+
 // Each calendar month touched by a lease carries one installment of its agreed rent.
-export function calculateMonth(data: Ledger, year: number, month: number) {
+export function calculateMonth(data: Ledger, year: number, month: number, through = localDate()) {
   const period = year + '-' + String(month).padStart(2, '0');
   const settlements = new Map<string, number>();
   let applied = 0;
@@ -74,15 +160,12 @@ export function calculateMonth(data: Ledger, year: number, month: number) {
       receipt.year !== year ||
       receipt.month !== month ||
       receipt.payment_type !== 'rent' ||
-      receipt.status === 'pending'
+      !isPostedPayment(receipt) ||
+      receipt.payment_date > through
     )
       continue;
     settlements.set(receipt.lease_id, (settlements.get(receipt.lease_id) ?? 0) + cents(receipt.amount));
-    if (
-      receipt.settlement_source === 'advance' ||
-      (!receipt.settlement_source && receipt.status === 'advance_used')
-    )
-      applied += cents(receipt.amount);
+    if (usesAdvance(receipt)) applied += cents(receipt.amount);
   }
   const properties = new Map(data.properties.map((p) => [p.id, p]));
   const tenants = new Map(data.tenants.map((t) => [t.id, t]));
@@ -108,6 +191,8 @@ export function calculateMonth(data: Ledger, year: number, month: number) {
   const collected = rows.reduce((sum, r) => sum + cents(r.collected), 0) / 100;
   const outstanding = rows.reduce((sum, r) => sum + cents(r.outstanding), 0) / 100;
   const occupied = new Set(rows.map((r) => r.property.id)).size;
+  const futureAdvance = data.payments.reduce((sum, p) =>
+    sum + (isPostedPayment(p) && p.payment_date > through ? cents(advanceMovement(p)) : 0), 0);
   return {
     rows,
     due,
@@ -117,7 +202,7 @@ export function calculateMonth(data: Ledger, year: number, month: number) {
     occupancy: data.properties.length ? Math.round((100 * occupied) / data.properties.length) : 0,
     cashCollected: (cents(collected) - applied) / 100,
     advanceApplied: applied / 100,
-    advanceBalance: data.leases.reduce((sum, l) => sum + cents(l.advance_balance), 0) / 100,
+    advanceBalance: (data.leases.reduce((sum, l) => sum + cents(l.advance_balance), 0) - futureAdvance) / 100,
   };
 }
 
@@ -238,10 +323,23 @@ export function applyCommand(
       const input = paymentSchema.parse(command.input);
       const lease = data.leases.find((l) => l.id === input.lease_id);
       if (!lease) throw new Error('Choose an existing lease.');
+      if (input.payment_date > localDate(now))
+        throw new Error('The payment date must be today or earlier. You can select a future billing month.');
+      if (command.replaces !== undefined) {
+        const original = data.payments.find((p) => p.id === command.replaces);
+        if (!original?.reversal) throw new Error('A replacement must link to a reversed payment.');
+        if (data.payments.some((p) => p.replaces_payment_id === command.replaces))
+          throw new Error('A replacement has already been recorded for this payment.');
+      }
+      if ((input.payment_type === 'advance' || input.payment_type === 'security_deposit') &&
+          ((lease.status === 'terminated' && (!lease.end_date || input.payment_date >= lease.end_date)) ||
+            (lease.end_date && input.payment_date > lease.end_date)))
+        throw new Error('This lease has ended. Choose a date during the tenancy to record this receipt.');
       const credit = command.kind === 'apply_advance';
       if (credit && input.payment_type !== 'rent') throw new Error('Advances can only be applied to rent.');
+      if (input.payment_type === 'deposit_deduction' && !input.notes?.trim())
+        throw new Error('Enter a reason for this deposit deduction.');
       const amount = cents(input.amount);
-      let balance = cents(lease.advance_balance);
       let status: Payment['status'] = 'paid';
       if (input.payment_type === 'rent') {
         const period = input.year + '-' + String(input.month).padStart(2, '0');
@@ -253,20 +351,13 @@ export function applyCommand(
               p.year === input.year &&
               p.month === input.month &&
               p.payment_type === 'rent' &&
-              p.status !== 'pending'
+              isPostedPayment(p)
           )
           .reduce((sum, p) => sum + cents(p.amount), 0);
         if (settled + amount > cents(lease.monthly_rent))
           throw new Error('Amount exceeds the rent outstanding for this month.');
         status = settled + amount === cents(lease.monthly_rent) ? 'paid' : 'partial';
-        if (credit) {
-          if (amount > balance) throw new Error('Amount exceeds the available advance.');
-          balance -= amount;
-          status = 'advance_used';
-        }
-      } else if (input.payment_type === 'advance') {
-        balance += amount;
-        if (balance > 999999999999) throw new Error('Advance balance exceeds the supported amount.');
+        if (credit) status = 'advance_used';
       }
       const payment: Payment = {
         ...record,
@@ -275,14 +366,34 @@ export function applyCommand(
         tenant_id: lease.tenant_id,
         notes: input.notes || null,
         status,
-        settlement_source: credit ? 'advance' : 'cash',
+        ...(input.payment_type !== 'deposit_deduction' && { settlement_source: credit ? 'advance' : 'cash' }),
+        ...(command.replaces !== undefined && { replaces_payment_id: command.replaces }),
       };
+      const balance = revisedAdvanceBalance(data, lease, payment, 1);
       return {
         ...data,
         payments: [payment, ...data.payments],
         leases: data.leases.map((l) =>
-          l.id === lease.id ? { ...l, advance_balance: balance / 100, updated_at: timestamp } : l
+          l.id === lease.id ? { ...l, advance_balance: balance, updated_at: timestamp } : l
         ),
+      };
+    }
+    case 'reverse_payment': {
+      const payment = data.payments.find((p) => p.id === command.input.id);
+      if (!payment || payment.reversal) throw new Error('Choose a payment that has not been reversed.');
+      const reason = command.input.reason.trim();
+      if (!reason || reason.length > 500) throw new Error('Enter a reversal reason of 1–500 characters.');
+      const lease = data.leases.find((l) => l.id === payment.lease_id);
+      if (!lease) throw new Error('The lease for this payment is unavailable.');
+      const balance = revisedAdvanceBalance(data, lease, payment, -1);
+      return {
+        ...data,
+        payments: data.payments.map((p) => p.id === payment.id
+          ? { ...p, reversal: { reason, reversed_at: timestamp } }
+          : p),
+        leases: data.leases.map((l) => l.id === lease.id
+          ? { ...l, advance_balance: balance, updated_at: timestamp }
+          : l),
       };
     }
     case 'end_lease': {
@@ -296,6 +407,7 @@ export function applyCommand(
       const billedAfter = data.payments.some(
         (p) =>
           p.lease_id === leaseId &&
+          isPostedPayment(p) &&
           p.payment_type === 'rent' &&
           p.year + '-' + String(p.month).padStart(2, '0') > end_date.slice(0, 7)
       );

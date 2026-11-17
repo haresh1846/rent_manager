@@ -5,6 +5,7 @@ import { useLocalWorkspace, type LocalWorkspace } from '../providers';
 import type { LeaseFormData, PaymentFormData, PropertyFormData, TenantFormData } from '../types';
 import { modifyLocalLedger } from './localStorage';
 import { createBackup, parseBackup } from './backup';
+import { staleRecovery, UnreadableLedgerError } from './workspace';
 import {
   applyCommand,
   emptyLedger,
@@ -15,13 +16,13 @@ import {
   type Maintenance,
   type MaintenanceInput,
 } from './model';
-export { calculateMonth, isLeaseCurrent, localDate } from './model';
+export { calculateMonth, fundBalances, isLeaseCurrent, localDate, usesAdvance } from './model';
 export type { Ledger, Maintenance, MaintenanceInput } from './model';
 
 export interface RestorePreview {
   backup: ReturnType<typeof parseBackup>;
   baseline: string;
-  currentCounts: Record<keyof Ledger, number>;
+  currentCounts: Record<keyof Ledger, number> | null;
 }
 
 interface LedgerContextValue {
@@ -38,8 +39,9 @@ interface LedgerContextValue {
   updateTenant(id: string, input: TenantFormData, expectedUpdatedAt?: string): Promise<void>;
   addLease(input: LeaseFormData): Promise<void>;
   endLease(id: string, endDate: string): Promise<void>;
-  addPayment(input: PaymentFormData): Promise<void>;
-  applyAdvance(leaseId: string, year: number, month: number, amount: number): Promise<void>;
+  addPayment(input: PaymentFormData, replaces?: string): Promise<void>;
+  applyAdvance(leaseId: string, year: number, month: number, amount: number, replaces?: string): Promise<void>;
+  reversePayment(id: string, reason: string): Promise<void>;
   addMaintenance(input: MaintenanceInput): Promise<void>;
   setMaintenanceStatus(id: string, status: Maintenance['status']): Promise<void>;
 }
@@ -135,7 +137,15 @@ function Workspace({ children, workspace }: { children: ReactNode; workspace: Lo
     exportBackup: () => enqueue(async () => createBackup(workspace, await modifyLocalLedger(workspace))),
     prepareRestore: (text) => enqueue(async () => {
       const backup = parseBackup(text, workspace);
-      const current = await modifyLocalLedger(workspace);
+      let current: Ledger;
+      try {
+        current = await modifyLocalLedger(workspace);
+      } catch (cause) {
+        if (cause instanceof UnreadableLedgerError) {
+          return { backup, baseline: cause.original, currentCounts: null };
+        }
+        throw cause;
+      }
       const currentCounts = {
         properties: current.properties.length,
         tenants: current.tenants.length,
@@ -145,17 +155,17 @@ function Workspace({ children, workspace }: { children: ReactNode; workspace: Lo
       };
       return { backup, baseline: JSON.stringify(current), currentCounts };
     }),
-    restoreBackup: ({ backup, baseline }) => enqueue(async () => {
+    restoreBackup: ({ backup, baseline, currentCounts }) => enqueue(async () => {
       if (!active.current || backup.workspace !== workspace) {
         throw new Error('Reopen the backup in its original workspace.');
       }
       // Check inside the storage transaction so a second tab cannot write between the check and replacement.
-      const result = await modifyLocalLedger(workspace, (current) => {
-        if (JSON.stringify(current) !== baseline) {
-          throw new Error('The workspace changed after the preview. Choose the backup again to review it.');
-        }
-        return backup.ledger;
-      });
+      const result = currentCounts === null
+        ? await modifyLocalLedger(workspace, undefined, { original: baseline, replacement: backup.ledger })
+        : await modifyLocalLedger(workspace, (current) => {
+            if (JSON.stringify(current) !== baseline) throw new Error(staleRecovery);
+            return backup.ledger;
+          });
       if (active.current) {
         setData(presentLedger(result));
         setError(null);
@@ -183,10 +193,12 @@ function Workspace({ children, workspace }: { children: ReactNode; workspace: Lo
       }),
     addLease: (input) => sync({ kind: 'lease', input }),
     endLease: (id, end_date) => sync({ kind: 'end_lease', input: { id, end_date } }),
-    addPayment: (input) => sync({ kind: 'payment', input }),
-    applyAdvance: (lease_id, year, month, amount) =>
+    addPayment: (input, replaces) => sync({ kind: 'payment', input, replaces }),
+    reversePayment: (id, reason) => sync({ kind: 'reverse_payment', input: { id, reason } }),
+    applyAdvance: (lease_id, year, month, amount, replaces) =>
       sync({
         kind: 'apply_advance',
+        replaces,
         input: {
           lease_id,
           year,
